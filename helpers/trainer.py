@@ -89,7 +89,6 @@ class Trainer(object):
     def train(self):
         """ Train Loop """
         self.model.train()  # Train mode
-        self.model = self.model.to(self.device)
         best_top1 = 0.
         self.cur_lr = self.args.lr
         self.global_step = 0
@@ -104,7 +103,6 @@ class Trainer(object):
     def eval(self):
         """ Evaluation Loop """
         self.model.eval()  # Evaluation mode
-        self.model = self.model.to(self.device)
         self._eval_epoch()
 
 

@@ -34,6 +34,8 @@ from tensorboardX import SummaryWriter
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 parser = argparse.ArgumentParser(description='Attention Distilled With Pruned Model Process')
@@ -75,7 +77,15 @@ parser.add_argument('--s-copy-t', action='store_true', default=False)  # During 
 # copy teacher during initialization
 parser.add_argument('--log-name', type=str, default='logs.txt')  # The name of the log file
 parser.add_argument('--dev-idx', type=int, default=0)  # The index of the used cuda device
+parser.add_argument('--num-workers', type=int, default=4)
+parser.add_argument('--distributed', action='store_true', help='distributed training')
+
 args = parser.parse_args()
+
+if args.distributed:
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend='nccl')
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'  # For Mac OS
 args.save_dir = f'saves/{int(time.time())}'
@@ -119,7 +129,6 @@ class PrunedModelTrainer(Trainer):
         self.last_epoch = None
 
         self.t_model.eval()
-        self.t_model = self.t_model.to(self.device)
 
     def _mask_pruned_filters_grad(self):
         conv_mask = self.s_pruner.get_conv_mask()
@@ -231,17 +240,18 @@ class PrunedModelTrainer(Trainer):
 
         # Get performance metrics
         top1, top5 = accuracy(s_logit, target, topk=(1, 5))
-        self.writer.add_scalars(
-            'data/scalar_group', {
-                'total_loss': loss.item(),
-                'cls_loss': loss_cls.item(),
-                'div_loss': loss_div.item(),
-                'kd_loss': loss_kd.item(),
-                'lr': self.cur_lr,
-                'top1': top1,
-                'top5': top5
-            }, self.global_step
-        )
+        if self.writer is not None:
+            self.writer.add_scalars(
+                'data/scalar_group', {
+                    'total_loss': loss.item(),
+                    'cls_loss': loss_cls.item(),
+                    'div_loss': loss_div.item(),
+                    'kd_loss': loss_kd.item(),
+                    'lr': self.cur_lr,
+                    'top1': top1,
+                    'top5': top5
+                }, self.global_step
+            )
         return loss, top1, top5
 
     def _evaluate(self, batch):
@@ -249,7 +259,7 @@ class PrunedModelTrainer(Trainer):
         logit = self.s_model(input)
         loss = self.criterion_cls(logit, target)
         top1, top5 = accuracy(logit, target, topk=(1, 5))
-        return {'loss': loss, 'top1': top1, 'top5': top5}
+        return {'loss': loss.item(), 'top1': top1.item(), 'top5': top5.item()}
 
     def _prune_s_model(self, do_prune):
         if not (do_prune and self.cur_epoch % self.args.prune_interval == 0):
@@ -277,7 +287,6 @@ class PrunedModelTrainer(Trainer):
         Github: https://github.com/he-y/filter-pruning-geometric-median/blob/master/pruning_cifar10.py
         """
         self.model.train()  # Train mode
-        self.model = self.model.to(self.device)
         best_top1 = 0.
         self.cur_lr = self.args.lr
         self.global_step = 0
@@ -296,26 +305,42 @@ class PrunedModelTrainer(Trainer):
 def main():
     set_seeds(args.seed)
     check_dirs_exist([args.save_dir])
-    logger = Logger(args.log_path)
-    device = get_device(args.dev_idx)
+    logger = Logger(args.log_path, distributed=args.distributed)
+    if args.distributed:
+        device = torch.device('cuda', local_rank)
+    else:
+        device = torch.device('cuda')
+        
     if args.dataset not in dataset.__dict__:
         raise NameError
     if args.t_model not in models.__dict__:
         raise NameError
     if args.s_model not in models.__dict__:
         raise NameError
-    train_loader, eval_loader, num_classes = dataset.__dict__[args.dataset](args.batch_size)
-    t_model = models.__dict__[args.t_model](num_classes=num_classes)
-    s_model = models.__dict__[args.s_model](num_classes=num_classes)
-    load_model(t_model, args.t_path, logger, device)
-    load_model(s_model, args.s_path, logger, device)
+    train_loader, eval_loader, num_classes = dataset.__dict__[args.dataset](args.batch_size, num_workers=args.num_workers, distributed=args.distributed)
+    pretrained = True if args.t_path is None else False
+    t_model = models.__dict__[args.t_model](pretrained=pretrained, num_classes=num_classes)
+    s_model = models.__dict__[args.s_model](pretrained=pretrained, num_classes=num_classes)
+    if not pretrained:
+        load_model(t_model, args.t_path, logger, device)
+        load_model(s_model, args.s_path, logger, device)
     optimizer = optim.SGD(
-        s_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True
-    )
+        s_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    
     base_trainer_cfg = (args, s_model, train_loader, eval_loader, optimizer, args.save_dir, device, logger)
-    writer = SummaryWriter(log_dir=args.log_dir)  # For tensorboardX
+    if not args.distributed or local_rank == 0:
+        writer = SummaryWriter(log_dir=args.log_dir)  # For tensorboard
+    else:
+        writer = None
     trainer = PrunedModelTrainer(t_model, writer, *base_trainer_cfg)
     logger.log('\n'.join(map(str, vars(args).items())))
+    
+    trainer.t_model = trainer.t_model.to(device)
+    trainer.s_model = trainer.s_model.to(device)
+    if args.distributed:
+        trainer.t_model = DDP(trainer.t_model, device_ids=[local_rank], output_device=local_rank)
+        trainer.s_model = DDP(trainer.s_model, device_ids=[local_rank], output_device=local_rank)
+    
     if args.evaluate:
         trainer.eval()
     else:

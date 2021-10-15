@@ -78,23 +78,30 @@ def cinic10(batch_size):
     return train_loader, val_loader, num_classes
 
 
-def imagenet(batch_size):
+def imagenet(batch_size, *, num_workers=4, distributed=True):
     num_classes = 1000
     data_dir = './data/ImageNet2012'
     train_dir = os.path.join(data_dir, 'train')
-    val_dir = os.path.join(data_dir, 'valid')
+    val_dir = os.path.join(data_dir, 'val')
     normalize = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    train_set = datasets.ImageFolder(
+        train_dir,
+        transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+        ]))
+    
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    else:
+        train_sampler = None
+        
     train_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(
-            train_dir,
-            transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-        ])),
-        batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=True)
+        train_set, batch_size=batch_size, shuffle=(train_sampler is None),
+        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(
             val_dir,
@@ -105,5 +112,6 @@ def imagenet(batch_size):
                 normalize,
             ])),
         batch_size=batch_size, shuffle=False,
-        num_workers=4, pin_memory=True)
+        num_workers=num_workers, pin_memory=True)
+
     return train_loader, val_loader, num_classes

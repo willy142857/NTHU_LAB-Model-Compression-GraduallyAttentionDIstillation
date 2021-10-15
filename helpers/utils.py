@@ -3,6 +3,7 @@ import random
 import numpy as np
 
 import torch
+import torch.distributed as dist
 
 
 def set_seeds(seed):
@@ -31,7 +32,7 @@ def print_nonzeros(model):
 
 def get_device(i=0):
     """ Get device (CPU or GPU) """
-    device = torch.device(f"cuda:{i}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
     n_gpu = torch.cuda.device_count()
     print("%s (%d GPUs)" % (device, n_gpu))
     return device
@@ -66,9 +67,10 @@ def load_model(model, file_path, logger, device='cuda'):
         model.load_state_dict(torch.load(file_path, map_location=device))
 
 
-def save_model(model, file_path, logger):
-    logger.log(f'Saving the model to {file_path}', verbose=True)
-    torch.save(model.state_dict(), file_path)
+def save_model(model, file_path, logger, distributed=False):
+    if not distributed or dist.get_rank() == 0:
+        logger.log(f'Saving the model to {file_path}', verbose=True)
+        torch.save(model.state_dict(), file_path)
 
 
 def get_average_meters(n=1):
@@ -84,15 +86,17 @@ def min_max_scalar(x):
 
 
 class Logger:
-    def __init__(self, log_path):
+    def __init__(self, log_path, distributed=True):
         self.log_path = log_path
-
+        self.distributed = distributed
+        
     def log(self, text, verbose=False):
-        with open(self.log_path, "a") as f:
-            f.write(f'{text}\n')
-            f.flush()
-            if verbose:
-                print(text)
+        if not self.distributed or dist.get_rank() == 0:
+            with open(self.log_path, "a") as f:
+                f.write(f'{text}\n')
+                f.flush()
+                if verbose:
+                    print(text)
 
     def log_line(self):
         line = '\n' + '-' * 100
