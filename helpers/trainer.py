@@ -9,6 +9,7 @@ from helpers.utils import (
 )
 
 import torch
+from torch.cuda.amp import autocast, GradScaler
 
 
 class Trainer(object):
@@ -19,6 +20,7 @@ class Trainer(object):
         self.train_loader = train_loader  # Train data loader
         self.eval_loader = eval_loader  # Eval data loader
         self.optimizer = optimizer
+        self.scaler = GradScaler()
         self.save_dir = save_dir
         self.device = device  # Device name
         self.logger = logger
@@ -40,9 +42,12 @@ class Trainer(object):
             batch = [t.to(self.device) for t in batch]
 
             self.optimizer.zero_grad()
-            b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
-            self.optimizer.step()
-
+            with autocast():
+                b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
+            self.scaler.scale(b_loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
             self.global_step += 1
             e_loss.update(b_loss.item(), len(batch))
             e_top1.update(b_top1.item(), len(batch))

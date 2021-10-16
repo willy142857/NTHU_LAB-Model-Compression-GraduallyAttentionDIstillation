@@ -232,7 +232,6 @@ class PrunedModelTrainer(Trainer):
             loss_cls = self.criterion_cls(s_logit, target)
             loss_div = loss_kd = torch.zeros(1).to(self.device)
             loss = loss_cls
-        loss.backward()
 
         # Set the gradient of the pruned weights to 0 if it's in the "hard prune mode"
         if self.do_hard_prune:
