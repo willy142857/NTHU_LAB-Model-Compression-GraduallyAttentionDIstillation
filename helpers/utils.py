@@ -13,10 +13,10 @@ def set_seeds(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
 
 
-def print_nonzeros(model):
+def print_nonzeros(model, print_layers=False):
     nonzero = total = 0
     for name, p in model.named_parameters():
         tensor = p.data.cpu().numpy()
@@ -24,8 +24,9 @@ def print_nonzeros(model):
         total_params = np.prod(tensor.shape)
         nonzero += nz_count
         total += total_params
-        print(f'{name:25} | nonzeros = {nz_count:7} / {total_params:7} ({100 * nz_count / total_params:6.2f}%) '
-              f'| total_pruned = {total_params - nz_count :7} | shape = {tensor.shape}')
+        if print_layers:
+            print(f'{name:25} | nonzeros = {nz_count:7} / {total_params:7} ({100 * nz_count / total_params:6.2f}%) '
+                f'| total_pruned = {total_params - nz_count :7} | shape = {tensor.shape}')
     print(f'alive: {nonzero}, pruned : {total - nonzero}, total: {total}, Compression rate : '
           f'{total / nonzero:10.2f}x  ({100 * (total - nonzero) / total:6.2f}% pruned)')
 

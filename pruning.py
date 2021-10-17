@@ -263,8 +263,8 @@ class PrunedModelTrainer(Trainer):
     def _prune_s_model(self, do_prune):
         if not (do_prune and self.cur_epoch % self.args.prune_interval == 0):
             return
-        self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)
-        print_nonzeros(self.s_model)
+        self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)        
+        print_nonzeros(self.s_model, print_layers=True)
 
     def _plot_feat(self, method):
         if method == 'msp':
@@ -303,7 +303,8 @@ class PrunedModelTrainer(Trainer):
 
 def main():
     set_seeds(args.seed)
-    check_dirs_exist([args.save_dir])
+    if not args.evaluate:
+        check_dirs_exist([args.save_dir])
     logger = Logger(args.log_path, distributed=args.distributed)
     if args.distributed:
         device = torch.device('cuda', local_rank)
@@ -317,7 +318,7 @@ def main():
     if args.s_model not in models.__dict__:
         raise NameError
     train_loader, eval_loader, num_classes = dataset.__dict__[args.dataset](args.batch_size, num_workers=args.num_workers, distributed=args.distributed)
-    pretrained = True if args.t_path is None else False
+    pretrained = True if not args.evaluate and args.t_path is None else False
     t_model = models.__dict__[args.t_model](pretrained=pretrained, num_classes=num_classes)
     s_model = models.__dict__[args.s_model](pretrained=pretrained, num_classes=num_classes)
     if not pretrained:
@@ -327,7 +328,7 @@ def main():
         s_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
     
     base_trainer_cfg = (args, s_model, train_loader, eval_loader, optimizer, args.save_dir, device, logger)
-    if not args.distributed or local_rank == 0:
+    if not args.evaluate and (not args.distributed or local_rank == 0):
         writer = SummaryWriter(log_dir=args.log_dir)  # For tensorboard
     else:
         writer = None
@@ -341,6 +342,7 @@ def main():
         trainer.s_model = DDP(trainer.s_model, device_ids=[local_rank], output_device=local_rank)
     
     if args.evaluate:
+        print_nonzeros(trainer.s_model)
         trainer.eval()
     else:
         trainer.train()
