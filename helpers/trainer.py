@@ -44,7 +44,6 @@ class Trainer(object):
             self.optimizer.zero_grad()
             with autocast():
                 b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
-            self.scaler.scale(b_loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
             
@@ -57,21 +56,20 @@ class Trainer(object):
         text = f'[ Epoch {self.cur_epoch} (Train) ] : {text}'
         self.logger.log(text, verbose=True)
 
+    @torch.no_grad()
     def _eval_epoch(self):
         self.model.eval()  # Evaluation mode
-        iter_bar = tqdm(self.eval_loader, desc='Iter')
         e_vals = None  # Epoch result array
         b_dict = None  # Batch result dict
-        for i, batch in enumerate(iter_bar, start=1):
+        for batch in tqdm(self.eval_loader, desc='Test'):
             batch = [t.to(self.device) for t in batch]
-            with torch.no_grad():  # Evaluation without gradient calculation
-                b_dict = self._evaluate(batch)  # Accuracy to print
-                b_vals = np.array(list(b_dict.values()))
+            b_dict = self._evaluate(batch)  # Accuracy to print
+            b_vals = np.array(list(b_dict.values()))
             if e_vals is None:
                 e_vals = [0] * len(b_vals)
             e_vals += b_vals
-            iter_bar.set_description('Iter')
-        e_dict = dict(zip(b_dict.keys(), e_vals/len(iter_bar)))
+            
+        e_dict = dict(zip(b_dict.keys(), e_vals/len(self.eval_loader)))
         text = f'[ Epoch {self.cur_epoch} (Test) ] : {e_dict}'
         self.logger.log(text, verbose=True)
         return e_dict
@@ -103,7 +101,7 @@ class Trainer(object):
             eval_result = self._eval_epoch()
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
-                save_model(self.model, self._get_save_model_path(), self.logger)
+                save_model(self.model, self._get_save_model_path(), self.logger, distributed=self.args.distributed)
 
     def eval(self):
         """ Evaluation Loop """

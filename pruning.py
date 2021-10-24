@@ -232,7 +232,9 @@ class PrunedModelTrainer(Trainer):
             loss_cls = self.criterion_cls(s_logit, target)
             loss_div = loss_kd = torch.zeros(1).to(self.device)
             loss = loss_cls
-
+            
+        self.scaler.scale(loss).backward()
+        
         # Set the gradient of the pruned weights to 0 if it's in the "hard prune mode"
         if self.do_hard_prune:
             self._mask_pruned_filters_grad()
@@ -263,8 +265,13 @@ class PrunedModelTrainer(Trainer):
     def _prune_s_model(self, do_prune):
         if not (do_prune and self.cur_epoch % self.args.prune_interval == 0):
             return
-        self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)        
-        print_nonzeros(self.s_model, print_layers=True)
+        self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)
+        if self.args.distributed:
+            self.t_model = DDP(self.t_model, device_ids=[local_rank], output_device=local_rank)
+            self.s_model = DDP(self.s_model, device_ids=[local_rank], output_device=local_rank)
+            
+        if not self.args.distributed or dist.get_rank() == 0:
+            print_nonzeros(self.s_model, print_layers=True)
 
     def _plot_feat(self, method):
         if method == 'msp':
@@ -296,9 +303,11 @@ class PrunedModelTrainer(Trainer):
             self._prune_s_model(self.do_soft_prune)
             # self._plot_feat(self.args.distill)
             eval_result = self._eval_epoch()
+            if not args.distributed or dist.get_rank() == 0:
+                print_nonzeros(self.s_model, print_layers=True)
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
-                save_model(self.model, self._get_save_model_path(), self.logger)
+                save_model(self.model, self._get_save_model_path(), self.logger, distributed=self.args.distributed)
 
 
 def main():
@@ -338,11 +347,13 @@ def main():
     trainer.t_model = trainer.t_model.to(device)
     trainer.s_model = trainer.s_model.to(device)
     if args.distributed:
+        # trainer.t_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.t_model)
+        # trainer.s_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.s_model)
         trainer.t_model = DDP(trainer.t_model, device_ids=[local_rank], output_device=local_rank)
         trainer.s_model = DDP(trainer.s_model, device_ids=[local_rank], output_device=local_rank)
     
     if args.evaluate:
-        print_nonzeros(trainer.s_model)
+        print_nonzeros(trainer.s_model, print_layers=True)
         trainer.eval()
     else:
         trainer.train()
