@@ -2,6 +2,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast, GradScaler
 
 from helpers.utils import min_max_scalar
 
@@ -20,6 +21,7 @@ class FiltersPruner(object):
         super(FiltersPruner, self).__init__()
         self.model = model
         self.optimizer = optimizer
+        self.scaler = GradScaler()
         self.train_loader = train_loader
         self.logger = logger
         self.gamma = gamma
@@ -162,25 +164,27 @@ class FiltersPruner(object):
         self.use_grad = val
 
     def _set_batches_weight_grad(self):
-        device = 'cpu'
-        self.model = self.model.to(device)
         params = list(self.model.parameters())
         train_iter = iter(self.train_loader)
-        input, target = [t.to(device) for t in next(train_iter)]
+        input, target = [t.to(self.device) for t in next(train_iter)]
+        
+        self.optimizer.zero_grad()
+        with autocast():
+            logit = self.model(input)
+            loss = self.cross_entropy(logit, target) / self.samp_batches
+        self.scaler.scale(loss).backward()
         for i, batch in enumerate(train_iter, start=1):
             if i == self.samp_batches:
                 break
-            inp, tar = [t.to(device) for t in batch]
-            input = torch.cat((input, inp), dim=0)
-            target = torch.cat((target, tar), dim=0)
-        self.optimizer.zero_grad()
-        logit = self.model(input)
-        loss = self.cross_entropy(logit, target)
-        loss.backward()
+            input, target = [t.to(self.device) for t in batch]
+            with autocast():
+                logit = self.model(input)
+                loss = self.cross_entropy(logit, target) / self.samp_batches
+            self.scaler.scale(loss).backward()
+
         grads = np.array([p.grad for p in params], dtype=object)
         for p, grad in zip(params, grads):
             p.grad.data = grad
-        self.model = self.model.to(self.device)
 
     def _prune_filters_and_channels(self, prune_rates, mode='filter-norm'):
         """
