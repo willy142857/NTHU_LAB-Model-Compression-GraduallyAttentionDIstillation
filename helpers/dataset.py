@@ -114,4 +114,4 @@ def imagenet(batch_size, *, num_workers=4, distributed=True):
         batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True)
 
-    return train_loader, val_loader, num_classes
+    return train_loader, val_loader, num_classes, train_sampler

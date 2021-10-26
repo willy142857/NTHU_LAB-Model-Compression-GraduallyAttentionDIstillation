@@ -326,7 +326,13 @@ def main():
         raise NameError
     if args.s_model not in models.__dict__:
         raise NameError
-    train_loader, eval_loader, num_classes = dataset.__dict__[args.dataset](args.batch_size, num_workers=args.num_workers, distributed=args.distributed)
+    
+    if args.distributed:
+        ngpus_per_node = torch.cuda.device_count()
+        args.batch_size = int(args.batch_size / ngpus_per_node)
+        args.num_workers = int((args.num_workers+ngpus_per_node-1) / ngpus_per_node)
+        
+    train_loader, eval_loader, num_classes, sampler = dataset.__dict__[args.dataset](args.batch_size, num_workers=args.num_workers, distributed=args.distributed)
     pretrained = True if not args.evaluate and args.t_path is None else False
     t_model = models.__dict__[args.t_model](pretrained=pretrained, num_classes=num_classes)
     s_model = models.__dict__[args.s_model](pretrained=pretrained, num_classes=num_classes)
@@ -341,7 +347,7 @@ def main():
         writer = SummaryWriter(log_dir=args.log_dir)  # For tensorboard
     else:
         writer = None
-    trainer = PrunedModelTrainer(t_model, writer, *base_trainer_cfg)
+    trainer = PrunedModelTrainer(t_model, writer, *base_trainer_cfg, sampler)
     logger.log('\n'.join(map(str, vars(args).items())))
     
     trainer.t_model = trainer.t_model.to(device)

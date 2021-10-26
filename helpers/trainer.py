@@ -14,11 +14,12 @@ from torch.cuda.amp import autocast, GradScaler
 
 class Trainer(object):
     """Training Helper Class"""
-    def __init__(self, args, model, train_loader, eval_loader, optimizer, save_dir, device, logger):
+    def __init__(self, args, model, train_loader, eval_loader, optimizer, save_dir, device, logger, sampler=None):
         self.args = args
         self.model = model
         self.train_loader = train_loader  # Train data loader
         self.eval_loader = eval_loader  # Eval data loader
+        self.sampler = sampler
         self.optimizer = optimizer
         self.scaler = GradScaler()
         self.save_dir = save_dir
@@ -97,6 +98,8 @@ class Trainer(object):
         self.global_step = 0
         for epoch in range(self.args.n_epochs):
             self.cur_epoch = epoch
+            if self.args.distributed or self.sampler is not None:
+                self.sampler.set_epoch(epoch)
             self._train_epoch()
             eval_result = self._eval_epoch()
             if best_top1 < eval_result['top1']:
