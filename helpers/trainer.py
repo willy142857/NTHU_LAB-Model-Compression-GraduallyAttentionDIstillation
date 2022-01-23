@@ -10,11 +10,11 @@ from helpers.utils import (
 
 import torch
 from torch.cuda.amp import autocast, GradScaler
-
+import torch.distributed as dist
 
 class Trainer(object):
     """Training Helper Class"""
-    def __init__(self, args, model, train_loader, eval_loader, optimizer, save_dir, device, logger, sampler=None):
+    def __init__(self, args, model, train_loader, eval_loader, optimizer, save_dir, device, logger, sampler=None, writer=None):
         self.args = args
         self.model = model
         self.train_loader = train_loader  # Train data loader
@@ -25,7 +25,7 @@ class Trainer(object):
         self.save_dir = save_dir
         self.device = device  # Device name
         self.logger = logger
-
+        self.writer = writer
         self.cur_epoch = None
         self.cur_lr = None
         self.global_step = None
@@ -36,24 +36,26 @@ class Trainer(object):
     def _train_epoch(self):
         self.model.train()  # Train mode
         e_loss, e_top1, e_top5 = get_average_meters(n=3)
-        iter_bar = tqdm(self.train_loader)
         self._adjust_learning_rate()
         text = str()
-        for i, batch in enumerate(iter_bar):
-            batch = [t.to(self.device) for t in batch]
+        is_sub_process = self.args.distributed and dist.get_rank() != 0
+        with tqdm(self.train_loader, disable=is_sub_process) as iter_bar:
+            for batch in iter_bar:
+                batch = [t.to(self.device) for t in batch]
 
-            self.optimizer.zero_grad()
-            with autocast():
-                b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            self.global_step += 1
-            e_loss.update(b_loss.item(), len(batch))
-            e_top1.update(b_top1.item(), len(batch))
-            e_top5.update(b_top5.item(), len(batch))
-            text = f'Iter (loss={e_loss.mean:5.3f} | top1={e_top1.mean:5.3} | top5={e_top5.mean:5.3})'
-            iter_bar.set_description(text)
+                self.optimizer.zero_grad()
+                with autocast():
+                    b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                
+                self.global_step += 1
+                e_loss.update(b_loss.item(), len(batch))
+                e_top1.update(b_top1.item(), len(batch))
+                e_top5.update(b_top5.item(), len(batch))
+                text = f'Iter (loss={e_loss.mean:5.3f} | top1={e_top1.mean:5.3} | top5={e_top5.mean:5.3})'
+                iter_bar.set_description(text)
+                
         text = f'[ Epoch {self.cur_epoch} (Train) ] : {text}'
         self.logger.log(text, verbose=True)
 
@@ -73,6 +75,8 @@ class Trainer(object):
         e_dict = dict(zip(b_dict.keys(), e_vals/len(self.eval_loader)))
         text = f'[ Epoch {self.cur_epoch} (Test) ] : {e_dict}'
         self.logger.log(text, verbose=True)
+        if self.writer is not None:
+            self.writer.add_scalars('eval/scalar_group', e_dict, self.cur_epoch)
         return e_dict
 
     def _adjust_learning_rate(self):
@@ -104,6 +108,8 @@ class Trainer(object):
             eval_result = self._eval_epoch()
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
+                if self.writer is not None:
+                    self.writer.add_text(f'top1: {best_top1}', self.cur_epoch)
                 save_model(self.model, self._get_save_model_path(), self.logger, distributed=self.args.distributed)
 
     def eval(self):

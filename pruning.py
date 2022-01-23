@@ -1,11 +1,14 @@
 import argparse
+import json
 import os
+from pathlib import Path
 import sys
 import time
 
+import comet_ml
+
 from helpers.utils import (
     check_dirs_exist,
-    get_device,
     accuracy,
     load_model,
     save_model,
@@ -99,11 +102,10 @@ if args.s_model is None:  # Pruning + Self Distillation
 
 class PrunedModelTrainer(Trainer):
     """  A trainer for gradually self-distillation combined with attention mechanism and hard or soft pruning. """
-    def __init__(self, t_model, writer, *args, **kwargs):
+    def __init__(self, t_model, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.t_model = t_model
         self.s_model = self.model
-        self.writer = writer
 
         self.do_prune = self.args.prune_mode is not 'None'
         self.do_dist = self.args.distill is not 'None'
@@ -266,12 +268,9 @@ class PrunedModelTrainer(Trainer):
         if not (do_prune and self.cur_epoch % self.args.prune_interval == 0):
             return
         self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)
-        if self.args.distributed:
-            self.t_model = DDP(self.t_model, device_ids=[local_rank], output_device=local_rank)
-            self.s_model = DDP(self.s_model, device_ids=[local_rank], output_device=local_rank)
             
         if not self.args.distributed or dist.get_rank() == 0:
-            print_nonzeros(self.s_model, print_layers=True)
+            print_nonzeros(self.s_model)
 
     def _plot_feat(self, method):
         if method == 'msp':
@@ -307,6 +306,8 @@ class PrunedModelTrainer(Trainer):
                 print_nonzeros(self.s_model, print_layers=True)
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
+                if self.writer is not None:
+                    self.writer.add_text('eval/best_top1', f'top1: {best_top1}', self.cur_epoch)
                 save_model(self.model, self._get_save_model_path(), self.logger, distributed=self.args.distributed)
 
 
@@ -342,12 +343,17 @@ def main():
     optimizer = optim.SGD(
         s_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
     
-    base_trainer_cfg = (args, s_model, train_loader, eval_loader, optimizer, args.save_dir, device, logger)
     if not args.evaluate and (not args.distributed or local_rank == 0):
-        writer = SummaryWriter(log_dir=args.log_dir)  # For tensorboard
+        file = Path('./comet_config.json')
+        if file.exists():
+            comet_config = json.load(file.open())
+            writer = SummaryWriter(log_dir=args.log_dir, comet_config=comet_config)
+        else:
+            writer = SummaryWriter(log_dir=args.log_dir)
     else:
         writer = None
-    trainer = PrunedModelTrainer(t_model, writer, *base_trainer_cfg, sampler)
+    base_trainer_cfg = (args, s_model, train_loader, eval_loader, optimizer, args.save_dir, device, logger)
+    trainer = PrunedModelTrainer(t_model, *base_trainer_cfg, sampler=sampler, writer=writer)
     logger.log('\n'.join(map(str, vars(args).items())))
     
     trainer.t_model = trainer.t_model.to(device)
