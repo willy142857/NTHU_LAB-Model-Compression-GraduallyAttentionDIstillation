@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import comet_ml
 
 import comet_ml
 
@@ -35,6 +36,7 @@ from distillers_zoo import (
 
 from tensorboardX import SummaryWriter
 import torch
+from torch.cuda.amp import autocast
 import torch.optim as optim
 import torch.nn as nn
 import torch.distributed as dist
@@ -218,22 +220,23 @@ class PrunedModelTrainer(Trainer):
         input, target = batch
 
         # Get the total_loss and backward
-        if self.do_dist:
-            # Do different kinds of distillation according to "args.distill"
-            betas = self.args.betas
-            s_feat, s_logit = self.s_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
-            t_feat, t_logit = self.t_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
-            s_f, t_f = self._get_dist_feat(self.args.distill, s_feat, t_feat, s_logit, t_logit)
-            loss_cls = self.criterion_cls(s_logit, target)
-            loss_div = self.criterion_div(s_logit, t_logit)
-            loss_kd = sum([self.criterion_kd[i](s_f[i], t_f[i]) * betas[i] for i in range(len(s_f))])
-            loss = loss_cls + loss_div * self.args.alpha + loss_kd
-        else:
-            # Normal training
-            s_logit = self.s_model(input)
-            loss_cls = self.criterion_cls(s_logit, target)
-            loss_div = loss_kd = torch.zeros(1).to(self.device)
-            loss = loss_cls
+        with autocast():
+            if self.do_dist:
+                # Do different kinds of distillation according to "args.distill"
+                betas = self.args.betas
+                s_feat, s_logit = self.s_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
+                t_feat, t_logit = self.t_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
+                s_f, t_f = self._get_dist_feat(self.args.distill, s_feat, t_feat, s_logit, t_logit)
+                loss_cls = self.criterion_cls(s_logit, target)
+                loss_div = self.criterion_div(s_logit, t_logit)
+                loss_kd = sum([self.criterion_kd[i](s_f[i], t_f[i]) * betas[i] for i in range(len(s_f))])
+                loss = loss_cls + loss_div * self.args.alpha + loss_kd
+            else:
+                # Normal training
+                s_logit = self.s_model(input)
+                loss_cls = self.criterion_cls(s_logit, target)
+                loss_div = loss_kd = torch.zeros(1).to(self.device)
+                loss = loss_cls
             
         self.scaler.scale(loss).backward()
         
@@ -297,6 +300,9 @@ class PrunedModelTrainer(Trainer):
         self.global_step = 0
         for epoch in range(self.args.n_epochs):
             self.cur_epoch = epoch
+            if self.args.distributed and self.sampler is not None:
+                self.sampler.set_epoch(epoch)
+                
             self._prune_s_model(self.do_hard_prune)
             self._train_epoch()
             self._prune_s_model(self.do_soft_prune)

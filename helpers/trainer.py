@@ -9,7 +9,7 @@ from helpers.utils import (
 )
 
 import torch
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import GradScaler
 import torch.distributed as dist
 
 class Trainer(object):
@@ -44,8 +44,7 @@ class Trainer(object):
                 batch = [t.to(self.device) for t in batch]
 
                 self.optimizer.zero_grad()
-                with autocast():
-                    b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
+                b_loss, b_top1, b_top5 = self._get_loss_and_backward(batch)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
                 
@@ -102,7 +101,7 @@ class Trainer(object):
         self.global_step = 0
         for epoch in range(self.args.n_epochs):
             self.cur_epoch = epoch
-            if self.args.distributed or self.sampler is not None:
+            if self.args.distributed and self.sampler is not None:
                 self.sampler.set_epoch(epoch)
             self._train_epoch()
             eval_result = self._eval_epoch()
