@@ -170,9 +170,14 @@ class PrunedModelTrainer(Trainer):
             criterion = [Attention(dataset=self.args.dataset)]
         elif method == 'afd':
             is_block = True
-            AFD = AFDBuilder()(args, t_model=self.t_model, s_model=self.s_model)
-            criterion = [AFD]
-            self.optimizer.add_param_group({'params': AFD.parameters()})
+            afd = AFDBuilder()(args, t_model=self.t_model, s_model=self.s_model).to(self.device)
+            self.optimizer.add_param_group({'params': afd.parameters()})
+
+            if self.args.distributed:
+                afd = nn.SyncBatchNorm.convert_sync_batchnorm(afd)
+                criterion = [DDP(afd, device_ids=[local_rank], output_device=local_rank)]
+            else:
+                criterion = [afd]
         else:
             raise NotImplementedError(method)
         return criterion, is_group, is_block

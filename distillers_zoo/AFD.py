@@ -35,6 +35,7 @@ class AFDBuilder():
         'resnet18': np.arange(1, (18 - 2) // 2 + 1),  # 8
         'resnet34im': np.arange(1, (34 - 2) // 2 + 1),  # 16
         'resnet18im': np.arange(1, (18 - 2) // 2 + 1),  # 8
+        'resnet50': np.arange(1, (50 - 2) // 3 + 1)  # 48
     }
 
     def __init__(self):
