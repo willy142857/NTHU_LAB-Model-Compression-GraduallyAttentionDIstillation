@@ -69,9 +69,11 @@ def load_model(model, file_path, logger, device='cuda'):
 
 
 def save_model(model, file_path, logger, distributed=False):
-    if not distributed or dist.get_rank() == 0:
-        logger.log(f'Saving the model to {file_path}', verbose=True)
+    if not distributed:
         torch.save(model.state_dict(), file_path)
+    elif dist.get_rank() == 0:
+        torch.save(model.module.state_dict(), file_path)
+    logger.log(f'Saving the model to {file_path}', verbose=True)
 
 
 def get_average_meters(n=1):

@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import sys
 import time
-import comet_ml
 
 import comet_ml
 
@@ -107,7 +106,6 @@ class PrunedModelTrainer(Trainer):
     def __init__(self, t_model, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.t_model = t_model
-        self.s_model = self.model
 
         self.do_prune = self.args.prune_mode is not 'None'
         self.do_dist = self.args.distill is not 'None'
@@ -120,7 +118,7 @@ class PrunedModelTrainer(Trainer):
             self.criterion_kd, self.is_group, self.is_block = self._init_kd(self.args.distill)
 
         self.s_pruner = FiltersPruner(
-            self.s_model,
+            self.model,
             self.optimizer,
             self.train_loader,
             self.logger,
@@ -136,7 +134,7 @@ class PrunedModelTrainer(Trainer):
 
     def _mask_pruned_filters_grad(self):
         conv_mask = self.s_pruner.get_conv_mask()
-        for name, module in self.s_model.named_modules():
+        for name, module in self.model.named_modules():
             if name in conv_mask:
                 grad = module.weight.grad
                 grad.data *= conv_mask[name]
@@ -170,7 +168,7 @@ class PrunedModelTrainer(Trainer):
             criterion = [Attention(dataset=self.args.dataset)]
         elif method == 'afd':
             is_block = True
-            afd = AFDBuilder()(args, t_model=self.t_model, s_model=self.s_model).to(self.device)
+            afd = AFDBuilder()(args, t_model=self.t_model, s_model=self.model).to(self.device)
             self.optimizer.add_param_group({'params': afd.parameters()})
 
             if self.args.distributed:
@@ -229,7 +227,7 @@ class PrunedModelTrainer(Trainer):
             if self.do_dist:
                 # Do different kinds of distillation according to "args.distill"
                 betas = self.args.betas
-                s_feat, s_logit = self.s_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
+                s_feat, s_logit = self.model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
                 t_feat, t_logit = self.t_model(input, is_group_feat=self.is_group, is_block_feat=self.is_block)
                 s_f, t_f = self._get_dist_feat(self.args.distill, s_feat, t_feat, s_logit, t_logit)
                 loss_cls = self.criterion_cls(s_logit, target)
@@ -238,7 +236,7 @@ class PrunedModelTrainer(Trainer):
                 loss = loss_cls + loss_div * self.args.alpha + loss_kd
             else:
                 # Normal training
-                s_logit = self.s_model(input)
+                s_logit = self.model(input)
                 loss_cls = self.criterion_cls(s_logit, target)
                 loss_div = loss_kd = torch.zeros(1).to(self.device)
                 loss = loss_cls
@@ -267,7 +265,7 @@ class PrunedModelTrainer(Trainer):
 
     def _evaluate(self, batch):
         input, target = batch
-        logit = self.s_model(input)
+        logit = self.model(input)
         loss = self.criterion_cls(logit, target)
         top1, top5 = accuracy(logit, target, topk=(1, 5))
         return {'loss': loss.item(), 'top1': top1.item(), 'top5': top5.item()}
@@ -276,9 +274,12 @@ class PrunedModelTrainer(Trainer):
         if not (do_prune and self.cur_epoch % self.args.prune_interval == 0):
             return
         self.s_pruner.prune(self.args.prune_mode, self.args.prune_rates)
-            
+        
+        if args.distributed:
+            self.model = DDP(self.model.module, device_ids=[local_rank], output_device=local_rank)
+    
         if not self.args.distributed or dist.get_rank() == 0:
-            print_nonzeros(self.s_model)
+            print_nonzeros(self.model)
 
     def _plot_feat(self, method):
         if method == 'msp':
@@ -287,7 +288,7 @@ class PrunedModelTrainer(Trainer):
             return
         for i, batch in enumerate(self.eval_loader):
             input, target = [t.to(self.device) for t in batch]
-            s_feat, _ = self.s_model(input, is_group_feat=True, is_block_feat=False)
+            s_feat, _ = self.model(input, is_group_feat=True, is_block_feat=False)
             t_feat, _ = self.t_model(input, is_group_feat=True, is_block_feat=False)
             s_f, t_f = self._get_dist_feat(self.args.distill, s_feat, t_feat, None, None)
             plotter.plot(s_f[0], t_f[0], input, target)
@@ -314,7 +315,7 @@ class PrunedModelTrainer(Trainer):
             # self._plot_feat(self.args.distill)
             eval_result = self._eval_epoch()
             if not args.distributed or dist.get_rank() == 0:
-                print_nonzeros(self.s_model, print_layers=True)
+                print_nonzeros(self.model, print_layers=True)
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
                 if self.writer is not None:
@@ -345,12 +346,17 @@ def main():
         args.num_workers = int((args.num_workers+ngpus_per_node-1) / ngpus_per_node)
         
     train_loader, eval_loader, num_classes, sampler = dataset.__dict__[args.dataset](args.batch_size, num_workers=args.num_workers, distributed=args.distributed)
+    
     pretrained = True if not args.evaluate and args.t_path is None else False
-    t_model = models.__dict__[args.t_model](pretrained=pretrained, num_classes=num_classes)
-    s_model = models.__dict__[args.s_model](pretrained=pretrained, num_classes=num_classes)
-    if not pretrained:
+    if pretrained:
+        t_model = models.__dict__[args.t_model](pretrained=pretrained, num_classes=num_classes)
+        s_model = models.__dict__[args.s_model](pretrained=pretrained, num_classes=num_classes)
+    else:
+        t_model = models.__dict__[args.t_model](num_classes=num_classes)
+        s_model = models.__dict__[args.s_model](num_classes=num_classes)
         load_model(t_model, args.t_path, logger, device)
         load_model(s_model, args.s_path, logger, device)
+        
     optimizer = optim.SGD(
         s_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
     
@@ -368,15 +374,13 @@ def main():
     logger.log('\n'.join(map(str, vars(args).items())))
     
     trainer.t_model = trainer.t_model.to(device)
-    trainer.s_model = trainer.s_model.to(device)
+    trainer.model = trainer.model.to(device)
     if args.distributed:
-        # trainer.t_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.t_model)
-        # trainer.s_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.s_model)
-        trainer.t_model = DDP(trainer.t_model, device_ids=[local_rank], output_device=local_rank)
-        trainer.s_model = DDP(trainer.s_model, device_ids=[local_rank], output_device=local_rank)
-    
+        # trainer.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.s_model)
+        trainer.model = DDP(trainer.model, device_ids=[local_rank], output_device=local_rank)
+        
     if args.evaluate:
-        print_nonzeros(trainer.s_model, print_layers=True)
+        print_nonzeros(trainer.model, print_layers=True)
         trainer.eval()
     else:
         trainer.train()

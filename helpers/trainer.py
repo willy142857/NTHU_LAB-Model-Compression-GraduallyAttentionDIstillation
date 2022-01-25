@@ -108,7 +108,7 @@ class Trainer(object):
             if best_top1 < eval_result['top1']:
                 best_top1 = eval_result['top1']
                 if self.writer is not None:
-                    self.writer.add_text(f'top1: {best_top1}', self.cur_epoch)
+                    self.writer.add_text('eval/best_top1', f'top1: {best_top1}', self.cur_epoch)
                 save_model(self.model, self._get_save_model_path(), self.logger, distributed=self.args.distributed)
 
     def eval(self):
