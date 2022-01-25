@@ -1,71 +1,94 @@
 import os
 
 import torch.utils.data
-import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+import torchvision.transforms as transforms
 
 
-def cifar10(batch_size):
+def cifar10(batch_size, *, num_workers=4, distributed=False):
     num_classes = 10
     normalize = transforms.Normalize((0.4913, 0.4824, 0.4467), (0.2470, 0.2435, 0.2616))
+    train_set = datasets.CIFAR10(root='./data', train=True,
+                                  transform=transforms.Compose([
+                                      transforms.RandomHorizontalFlip(),
+                                      transforms.RandomCrop(32, padding=4),
+                                      transforms.ToTensor(),
+                                      normalize,
+                                  ]), download=True)
+
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    else:
+        train_sampler = None
+
     train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, padding=4),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True),
-        batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=True)
+        train_set, batch_size=batch_size, shuffle=(train_sampler is None),
+        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+    
     val_loader = torch.utils.data.DataLoader(
         datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
             transforms.ToTensor(),
             normalize,
         ]), download=True),
         batch_size=batch_size, shuffle=False,
-        num_workers=4, pin_memory=True)
-    return train_loader, val_loader, num_classes
+        num_workers=num_workers, pin_memory=True)
+    return train_loader, val_loader, num_classes, train_sampler
 
 
-def cifar100(batch_size):
+def cifar100(batch_size, *, num_workers=4, distributed=False):
     num_classes = 100
     normalize = transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
+    train_set = datasets.CIFAR100(root='./data', train=True,
+                                  transform=transforms.Compose([
+                                      transforms.RandomHorizontalFlip(),
+                                      transforms.RandomCrop(32, padding=4),
+                                      transforms.ToTensor(),
+                                      normalize,
+                                  ]), download=True)
+
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    else:
+        train_sampler = None
+
     train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR100(root='./data', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, padding=4),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True),
-        batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=True)
+        train_set, batch_size=batch_size, shuffle=(train_sampler is None),
+        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+    
     val_loader = torch.utils.data.DataLoader(
         datasets.CIFAR100(root='./data', train=False, transform=transforms.Compose([
             transforms.ToTensor(),
             normalize,
         ]), download=True),
         batch_size=batch_size, shuffle=False,
-        num_workers=4, pin_memory=True)
-    return train_loader, val_loader, num_classes
+        num_workers=num_workers, pin_memory=True)
+    return train_loader, val_loader, num_classes, train_sampler
 
 
-def cinic10(batch_size):
+def cinic10(batch_size, *, num_workers=4, distributed=False):
     num_classes = 10
     data_dir = './data/cinic-10'
     train_dir = os.path.join(data_dir, 'train')
     val_dir = os.path.join(data_dir, 'val')
     normalize = transforms.Normalize((0.4789, 0.4723, 0.4305), (0.2421, 0.2383, 0.2587))
+    train_set = datasets.ImageFolder(
+        train_dir,
+        transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+            normalize,
+        ]))
+    
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    else:
+        train_sampler = None
+        
     train_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(
-            train_dir,
-            transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(32, padding=4),
-                transforms.ToTensor(),
-                normalize,
-            ])),
-        batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=True)
+        train_set, batch_size=batch_size, shuffle=(train_sampler is None),
+        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+    
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(
             val_dir,
@@ -75,7 +98,7 @@ def cinic10(batch_size):
             ])),
         batch_size=batch_size, shuffle=False,
         num_workers=4, pin_memory=True)
-    return train_loader, val_loader, num_classes
+    return train_loader, val_loader, num_classes, train_sampler
 
 
 def imagenet(batch_size, *, num_workers=4, distributed=True):
