@@ -182,7 +182,7 @@ class FiltersPruner(object):
                 loss = self.cross_entropy(logit, target) / self.samp_batches
             self.scaler.scale(loss).backward()
 
-        grads = np.array([p.grad for p in params], dtype=object)
+        grads = [p.grad for p in params]
         for p, grad in zip(params, grads):
             p.grad.data = grad
 
