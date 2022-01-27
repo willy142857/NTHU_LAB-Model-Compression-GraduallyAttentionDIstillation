@@ -38,7 +38,8 @@ class PostQuantizer:
             quan_w[left_ind] = kmeans.cluster_centers_[kmeans.labels_].reshape(-1)
             module.weight.data = torch.from_numpy(quan_w).float().to(self.device)
 
-            quan_labels = np.zeros(ori_w.shape)
+            # pruned wieghts will be assign label -1
+            quan_labels = -np.ones(ori_w.shape)
             quan_labels[left_ind] = kmeans.labels_
 
             self.quan_dict[name] = quan_labels

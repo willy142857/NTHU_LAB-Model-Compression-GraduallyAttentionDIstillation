@@ -4,7 +4,7 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
-
+from torch.nn.parallel import DataParallel, DistributedDataParallel
 
 def set_seeds(seed):
     """ Set random seeds """
@@ -69,10 +69,13 @@ def load_model(model, file_path, logger, device='cuda'):
 
 
 def save_model(model, file_path, logger, distributed=False):
-    if not distributed:
-        torch.save(model.state_dict(), file_path)
-    elif dist.get_rank() == 0:
+    if (isinstance(model, DistributedDataParallel)):
+        if dist.get_rank() == 0:
+            torch.save(model.module.state_dict(), file_path)
+    elif isinstance(model, DataParallel):
         torch.save(model.module.state_dict(), file_path)
+    else:
+        torch.save(model.state_dict(), file_path)
     logger.log(f'Saving the model to {file_path}', verbose=True)
 
 
