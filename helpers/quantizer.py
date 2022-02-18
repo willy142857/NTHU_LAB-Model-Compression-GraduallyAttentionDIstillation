@@ -39,10 +39,8 @@ class PostQuantizer:
             module.weight.data = torch.from_numpy(quan_w).float().to(self.device)
 
             # pruned wieghts will be assign label -1
-            quan_labels = -np.ones(ori_w.shape)
+            quan_labels = -np.ones(ori_w.shape, dtype=int)
             quan_labels[left_ind] = kmeans.labels_
 
-            self.quan_dict[name] = quan_labels
-
-
+            self.quan_dict[name] = torch.from_numpy(quan_labels).to(self.device)
 

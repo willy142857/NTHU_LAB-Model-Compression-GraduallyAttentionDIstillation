@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from helpers.utils import (
     check_dirs_exist,
     accuracy,
+    print_nonzeros,
     set_seeds,
     load_model,
     Logger
@@ -80,28 +81,28 @@ class QuantizedModelTrainer(Trainer):
                 if name not in self.mask:
                     self.mask[name] = dict()
                 mask = self.mask[name]
-                weight = module.weight.data.cpu().numpy()
-                grad = module.weight.grad.data.cpu().numpy()
+                weight = module.weight.data
+                grad = module.weight.grad.data
 
                 # Mask gradients of pruend weights
                 key = 'grad'
                 if key not in mask:
-                    mask[key] = np.where(weight == 0, 0, 1)
+                    mask[key] = torch.where(weight == 0, 0, 1)
                 grad *= mask[key]
 
                 # Set gradients of quantized weights
                 quan_labels = self.quan_dict[name]
-                quan_range = len(np.unique(quan_labels))
+                quan_range = quan_labels.max().item() + 1
                 key = 'ind'
                 if key not in mask:
                     mask[key] = dict()
                 for i in range(quan_range):
                     if i not in mask[key]:
-                        mask[key][i] = np.where(quan_labels == i)
+                        mask[key][i] = torch.where(quan_labels == i)
                     group_ind = mask[key][i]
-                    group_grad_sum = np.sum(grad[group_ind])
+                    group_grad_sum = torch.sum(grad[group_ind])
                     grad[group_ind] = group_grad_sum
-                module.weight.grad.data = torch.from_numpy(grad).to(self.device)
+                module.weight.grad.data = grad
 
     def _get_loss_and_backward(self, batch):
         input, target = batch
@@ -218,6 +219,7 @@ def main():
         evaluator = Evaluator(*base_cfg)
         evaluator.eval()
 
+    logger.log(print_nonzeros(trainer.model))
 
 if __name__ == '__main__':
     main()
