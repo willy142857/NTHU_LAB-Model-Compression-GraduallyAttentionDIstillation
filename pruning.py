@@ -370,15 +370,15 @@ def main():
             writer = SummaryWriter(log_dir=args.log_dir)
     else:
         writer = None
+        
+    t_model = t_model.to(device)
+    s_model = s_model.to(device)
+    if args.distributed:
+        s_model = DDP(s_model, device_ids=[local_rank], output_device=local_rank)  
     base_trainer_cfg = (args, s_model, train_loader, eval_loader, optimizer, args.save_dir, device, logger)
     trainer = PrunedModelTrainer(t_model, *base_trainer_cfg, sampler=sampler, writer=writer)
     logger.log('\n'.join(map(str, vars(args).items())))
     
-    trainer.t_model = trainer.t_model.to(device)
-    trainer.model = trainer.model.to(device)
-    if args.distributed:
-        # trainer.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(trainer.s_model)
-        trainer.model = DDP(trainer.model, device_ids=[local_rank], output_device=local_rank)
         
     if args.evaluate:
         print_nonzeros(trainer.model, print_layers=True)
