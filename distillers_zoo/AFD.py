@@ -41,7 +41,7 @@ class AFDBuilder():
     def __init__(self):
         pass
 
-    def unique_shape(selg, s_shapes):
+    def unique_shape(self, s_shapes):
         n_s = []
         unique_shapes = []
         n = -1
@@ -60,7 +60,8 @@ class AFDBuilder():
             image_size = 32
         else:
             image_size = 224
-        data = torch.randn(2, 3, image_size, image_size)
+        device = next(t_model.parameters()).device
+        data = torch.randn(2, 3, image_size, image_size, device=device)
         t_model.eval()
         s_model.eval()
         with torch.no_grad():
